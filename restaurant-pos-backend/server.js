@@ -12,6 +12,7 @@ const reportRoutes = require('./routes/reports');
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const inventoryRoutes = require('./routes/inventory');
+const tableRoutes = require('./routes/tables');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -49,6 +50,7 @@ app.use('/api/orders', orderRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/inventory', inventoryRoutes);
+app.use('/api/tables', tableRoutes);
 
 // ========================
 //    ERROR HANDLERS

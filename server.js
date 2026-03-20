@@ -1,9 +1,8 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { connectDB } = require('./config/database');
+const { connectDB, sequelize } = require('./config/database');
 const { errorHandler, notFound } = require('./middleware/errorHandler');
-const dailySummaryRoutes = require('./routes/dailySummary');
 
 // Rutas
 const menuRoutes = require('./routes/menu');
@@ -14,6 +13,7 @@ const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const inventoryRoutes = require('./routes/inventory');
 const tableRoutes = require('./routes/tables');
+const dailySummaryRoutes = require('./routes/dailySummary');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -31,7 +31,6 @@ app.use(cors({
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
 
 // ========================
 //    RUTAS
@@ -54,6 +53,7 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/daily', dailySummaryRoutes);
+
 // ========================
 //    ERROR HANDLERS
 // ========================
@@ -65,6 +65,16 @@ app.use(errorHandler);
 // ========================
 const start = async () => {
   await connectDB();
+
+  // Sincronizar tabla daily_summaries
+  try {
+    const DailySummary = require('./models/DailySummary')(sequelize);
+    await DailySummary.sync({ alter: true });
+    console.log('✅ Tabla daily_summaries sincronizada');
+  } catch (error) {
+    console.error('⚠️ Error sincronizando daily_summaries:', error.message);
+  }
+
   app.listen(PORT, () => {
     console.log(`\n🚀 Servidor corriendo en http://localhost:${PORT}`);
     console.log(`📋 Health check: http://localhost:${PORT}/api/health`);

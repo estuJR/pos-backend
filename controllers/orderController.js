@@ -160,6 +160,15 @@ const createOrder = async (req, res) => {
     const itemsWithOrderId = orderItemsData.map(item => ({ ...item, order_id: order.id }));
     await OrderItem.bulkCreate(itemsWithOrderId, { transaction: t });
 
+    // Descontar stock de cada producto
+    for (const item of items) {
+      const product = await Product.findByPk(item.product_id, { transaction: t });
+      if (product && product.stock !== null && product.stock !== undefined) {
+        const newStock = Math.max(0, product.stock - item.quantity);
+        await product.update({ stock: newStock }, { transaction: t });
+      }
+    }
+
     // Actualizar estado de la mesa
     if (table_id) {
       await Table.update({ status: 'occupied' }, { where: { id: table_id }, transaction: t });
@@ -211,6 +220,12 @@ const addItemToOrder = async (req, res) => {
       notes: notes || null,
     }, { transaction: t });
 
+    // Descontar stock
+    if (product.stock !== null && product.stock !== undefined) {
+      const newStock = Math.max(0, product.stock - quantity);
+      await product.update({ stock: newStock }, { transaction: t });
+    }
+
     // Recalcular totales de la orden
     await recalculateOrderTotals(order_id, t);
     await t.commit();
@@ -246,7 +261,6 @@ const updateOrderStatus = async (req, res) => {
     const updates = { status };
     if (status === 'paid' || status === 'cancelled') {
       updates.closed_at = new Date();
-      // Liberar la mesa
       if (order.table_id) {
         await Table.update({ status: 'available' }, { where: { id: order.table_id }, transaction: t });
       }
@@ -267,6 +281,12 @@ const removeItemFromOrder = async (req, res) => {
     const { id: order_id, item_id } = req.params;
     const item = await OrderItem.findOne({ where: { id: item_id, order_id }, transaction: t });
     if (!item) { await t.rollback(); return res.status(404).json({ success: false, message: 'Item no encontrado' }); }
+
+    // Devolver stock al cancelar item
+    const product = await Product.findByPk(item.product_id, { transaction: t });
+    if (product && product.stock !== null && product.stock !== undefined) {
+      await product.update({ stock: product.stock + item.quantity }, { transaction: t });
+    }
 
     await item.update({ status: 'cancelled' }, { transaction: t });
     await recalculateOrderTotals(order_id, t);

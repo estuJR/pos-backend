@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const { connectDB } = require('./config/database');
 const { errorHandler, notFound } = require('./middleware/errorHandler');
+const dailySummaryRoutes = require('./routes/dailySummary');
 
 // Rutas
 const menuRoutes = require('./routes/menu');
@@ -31,6 +32,7 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+
 // ========================
 //    RUTAS
 // ========================
@@ -51,7 +53,7 @@ app.use('/api/orders', orderRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/inventory', inventoryRoutes);
-
+app.use('/api/daily', dailySummaryRoutes);
 // ========================
 //    ERROR HANDLERS
 // ========================

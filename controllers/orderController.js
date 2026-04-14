@@ -111,14 +111,14 @@ const createOrder = async (req, res) => {
       return res.status(400).json({ success: false, message: 'La orden debe tener al menos un producto' });
     }
 
-    // Calcular totales
     let subtotal = 0;
     const taxRate = parseFloat(process.env.RESTAURANT_TAX || 0.12);
     const orderItemsData = [];
 
     for (const item of items) {
       const product = await Product.findByPk(item.product_id, { transaction: t });
-      if (!product || !product.is_available) {
+      // FIX: solo rechazar si explícitamente false (no si es null)
+      if (!product || product.is_available === false) {
         await t.rollback();
         return res.status(400).json({ success: false, message: `Producto ${item.product_id} no disponible` });
       }
@@ -137,7 +137,6 @@ const createOrder = async (req, res) => {
     const tax_amount = parseFloat((subtotal * taxRate).toFixed(2));
     const total = parseFloat((subtotal + tax_amount).toFixed(2));
 
-    // Generar numero de orden
     const today = new Date();
     const dateStr = today.toISOString().slice(0, 10).replace(/-/g, '');
     const orderCount = await Order.count();
@@ -156,11 +155,9 @@ const createOrder = async (req, res) => {
       status: 'open',
     }, { transaction: t });
 
-    // Crear items
     const itemsWithOrderId = orderItemsData.map(item => ({ ...item, order_id: order.id }));
     await OrderItem.bulkCreate(itemsWithOrderId, { transaction: t });
 
-    // Descontar stock de cada producto
     for (const item of items) {
       const product = await Product.findByPk(item.product_id, { transaction: t });
       if (product && product.stock !== null && product.stock !== undefined) {
@@ -169,7 +166,6 @@ const createOrder = async (req, res) => {
       }
     }
 
-    // Actualizar estado de la mesa
     if (table_id) {
       await Table.update({ status: 'occupied' }, { where: { id: table_id }, transaction: t });
     }
@@ -197,14 +193,18 @@ const addItemToOrder = async (req, res) => {
     const { product_id, quantity, notes } = req.body;
 
     const order = await Order.findByPk(order_id, { transaction: t });
-    if (!order) { await t.rollback(); return res.status(404).json({ success: false, message: 'Orden no encontrada' }); }
+    if (!order) {
+      await t.rollback();
+      return res.status(404).json({ success: false, message: 'Orden no encontrada' });
+    }
     if (['paid', 'cancelled'].includes(order.status)) {
       await t.rollback();
       return res.status(400).json({ success: false, message: 'No se puede modificar una orden cerrada' });
     }
 
     const product = await Product.findByPk(product_id, { transaction: t });
-    if (!product || !product.is_available) {
+    // FIX: solo rechazar si explícitamente false (no si is_available es null)
+    if (!product || product.is_available === false) {
       await t.rollback();
       return res.status(400).json({ success: false, message: 'Producto no disponible' });
     }
@@ -220,17 +220,23 @@ const addItemToOrder = async (req, res) => {
       notes: notes || null,
     }, { transaction: t });
 
-    // Descontar stock
     if (product.stock !== null && product.stock !== undefined) {
       const newStock = Math.max(0, product.stock - quantity);
       await product.update({ stock: newStock }, { transaction: t });
     }
 
-    // Recalcular totales de la orden
     await recalculateOrderTotals(order_id, t);
     await t.commit();
 
-    res.status(201).json({ success: true, data: newItem, message: 'Producto agregado a la orden' });
+    // Devolver la orden completa actualizada
+    const updatedOrder = await Order.findByPk(order_id, {
+      include: [
+        { model: Table, as: 'table' },
+        { model: OrderItem, as: 'items', include: [{ model: Product, as: 'product' }] },
+      ],
+    });
+
+    res.status(201).json({ success: true, data: updatedOrder, message: 'Producto agregado a la orden' });
   } catch (error) {
     await t.rollback();
     res.status(500).json({ success: false, message: error.message });
@@ -256,7 +262,10 @@ const updateOrderStatus = async (req, res) => {
     const { id } = req.params;
     const { status } = req.body;
     const order = await Order.findByPk(id, { transaction: t });
-    if (!order) { await t.rollback(); return res.status(404).json({ success: false, message: 'Orden no encontrada' }); }
+    if (!order) {
+      await t.rollback();
+      return res.status(404).json({ success: false, message: 'Orden no encontrada' });
+    }
 
     const updates = { status };
     if (status === 'paid' || status === 'cancelled') {
@@ -280,9 +289,11 @@ const removeItemFromOrder = async (req, res) => {
   try {
     const { id: order_id, item_id } = req.params;
     const item = await OrderItem.findOne({ where: { id: item_id, order_id }, transaction: t });
-    if (!item) { await t.rollback(); return res.status(404).json({ success: false, message: 'Item no encontrado' }); }
+    if (!item) {
+      await t.rollback();
+      return res.status(404).json({ success: false, message: 'Item no encontrado' });
+    }
 
-    // Devolver stock al cancelar item
     const product = await Product.findByPk(item.product_id, { transaction: t });
     if (product && product.stock !== null && product.stock !== undefined) {
       await product.update({ stock: product.stock + item.quantity }, { transaction: t });

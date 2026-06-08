@@ -34,7 +34,24 @@ const login = async (req, res) => {
       return res.status(401).json({ success: false, message: 'PIN incorrecto' });
     }
 
-    // Generar JWT
+    // ── 2FA: Solo supervisores con 2FA activado ──────────────────
+    if (authenticatedUser.role === 'supervisor' && authenticatedUser.two_factor_enabled) {
+      // Generar token temporal (5 minutos) para completar el 2FA
+      const tempToken = jwt.sign(
+        { id: authenticatedUser.id, pending2FA: true },
+        process.env.JWT_SECRET,
+        { expiresIn: '5m' }
+      );
+
+      return res.json({
+        success: true,
+        requires2FA: true,
+        tempToken,
+      });
+    }
+    // ─────────────────────────────────────────────────────────────
+
+    // Sin 2FA → generar JWT normal
     const token = jwt.sign(
       {
         id: authenticatedUser.id,
@@ -65,7 +82,6 @@ const me = async (req, res) => {
 };
 
 // GET /api/auth/users — listar usuarios para la pantalla de login
-// (sin datos sensibles, solo nombre y rol)
 const getUsers = async (req, res) => {
   try {
     const users = await User.findAll({

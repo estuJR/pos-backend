@@ -1,0 +1,299 @@
+const express = require('express')
+const router = express.Router()
+const speakeasy = require('speakeasy')
+const QRCode = require('qrcode')
+const bcrypt = require('bcryptjs')
+const crypto = require('crypto')
+const jwt = require('jsonwebtoken')
+const rateLimit = require('express-rate-limit')
+const { User } = require('../models')
+const { protect } = require('../middleware/auth')
+const { sequelize } = require('../config/database')
+
+// Rate limiter para endpoints de 2FA
+const totpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { success: false, message: 'Demasiados intentos. Espera 15 minutos.' },
+})
+
+// ─── Helpers ────────────────────────────────────────────────────
+
+async function generateRecoveryCodes() {
+  const codes = []
+  const hashes = []
+  for (let i = 0; i < 8; i++) {
+    const raw = crypto.randomBytes(6).toString('hex').toUpperCase()
+    const formatted = `${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 12)}`
+    const hash = await bcrypt.hash(formatted, 12)
+    codes.push(formatted)
+    hashes.push(hash)
+  }
+  return { codes, hashes }
+}
+
+async function checkTOTPAttempts(userId) {
+  const windowStart = new Date(Date.now() - 15 * 60 * 1000)
+  const [rows] = await sequelize.query(
+    `SELECT COUNT(*) as attempts FROM totp_attempts 
+     WHERE user_id = ? AND attempted_at > ? AND success = FALSE`,
+    { replacements: [userId, windowStart] }
+  )
+  return rows[0].attempts
+}
+
+async function logTOTPAttempt(userId, success) {
+  await sequelize.query(
+    `INSERT INTO totp_attempts (user_id, success) VALUES (?, ?)`,
+    { replacements: [userId, success] }
+  )
+  await sequelize.query(
+    `DELETE FROM totp_attempts WHERE user_id = ? AND attempted_at < DATE_SUB(NOW(), INTERVAL 1 HOUR)`,
+    { replacements: [userId] }
+  )
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  GET /api/auth/2fa/setup
+//  Genera el QR para escanear — requiere JWT normal
+// ═══════════════════════════════════════════════════════════════
+router.get('/2fa/setup', protect, async (req, res) => {
+  try {
+    const userId = req.user.id
+
+    const user = await User.findByPk(userId)
+    if (!user) return res.status(404).json({ success: false, message: 'Usuario no encontrado' })
+    if (user.role !== 'supervisor') return res.status(403).json({ success: false, message: 'Solo supervisores pueden activar 2FA' })
+    if (user.two_factor_enabled) return res.status(400).json({ success: false, message: '2FA ya está activado' })
+
+    const secret = speakeasy.generateSecret({
+      name: `El Jardín de los Conejos:${user.name}`,
+      issuer: 'El Jardín de los Conejos POS',
+      length: 20,
+    })
+
+    // Guardar secret temporalmente (aún no activado)
+    await sequelize.query(
+      `UPDATE users SET two_factor_secret = ? WHERE id = ?`,
+      { replacements: [secret.base32, userId] }
+    )
+
+    const otpauthUrl = speakeasy.otpauthURL({
+      secret: secret.base32,
+      label: encodeURIComponent(`El Jardín de los Conejos:${user.name}`),
+      issuer: 'El Jardín de los Conejos POS',
+      encoding: 'base32',
+      digits: 6,
+      period: 30,
+    })
+
+    const qrDataUrl = await QRCode.toDataURL(otpauthUrl, {
+      width: 300,
+      margin: 2,
+      color: { dark: '#2C1810', light: '#FFFFFF' },
+    })
+
+    res.json({ success: true, qrCode: qrDataUrl, manualCode: secret.base32 })
+  } catch (err) {
+    console.error('setup2FA error:', err)
+    res.status(500).json({ success: false, message: 'Error generando 2FA' })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+//  POST /api/auth/2fa/enable
+//  Confirma el código y activa 2FA — requiere JWT normal
+// ═══════════════════════════════════════════════════════════════
+router.post('/2fa/enable', protect, totpLimiter, async (req, res) => {
+  try {
+    const userId = req.user.id
+    const { token } = req.body
+
+    if (!token || !/^\d{6}$/.test(token)) {
+      return res.status(400).json({ success: false, message: 'Código inválido (debe ser 6 dígitos)' })
+    }
+
+    const attempts = await checkTOTPAttempts(userId)
+    if (attempts >= 5) {
+      return res.status(429).json({ success: false, message: 'Demasiados intentos fallidos. Espera 15 minutos.' })
+    }
+
+    const [rows] = await sequelize.query(
+      `SELECT two_factor_secret, two_factor_enabled FROM users WHERE id = ?`,
+      { replacements: [userId] }
+    )
+    const userData = rows[0]
+    if (!userData?.two_factor_secret) {
+      return res.status(400).json({ success: false, message: 'Primero genera el QR' })
+    }
+    if (userData.two_factor_enabled) {
+      return res.status(400).json({ success: false, message: '2FA ya está activado' })
+    }
+
+    const verified = speakeasy.totp.verify({
+      secret: userData.two_factor_secret,
+      encoding: 'base32',
+      token,
+      window: 1,
+    })
+
+    await logTOTPAttempt(userId, verified)
+
+    if (!verified) {
+      return res.status(400).json({ success: false, message: 'Código incorrecto. Verifica la hora de tu iPhone.' })
+    }
+
+    // Activar 2FA + generar códigos de recuperación
+    const { codes, hashes } = await generateRecoveryCodes()
+
+    await sequelize.query(
+      `UPDATE users SET two_factor_enabled = TRUE, two_factor_confirmed_at = NOW() WHERE id = ?`,
+      { replacements: [userId] }
+    )
+
+    await sequelize.query(`DELETE FROM recovery_codes WHERE user_id = ?`, { replacements: [userId] })
+    for (const hash of hashes) {
+      await sequelize.query(
+        `INSERT INTO recovery_codes (user_id, code_hash) VALUES (?, ?)`,
+        { replacements: [userId, hash] }
+      )
+    }
+
+    res.json({ success: true, message: '2FA activado correctamente', recoveryCodes: codes })
+  } catch (err) {
+    console.error('enable2FA error:', err)
+    res.status(500).json({ success: false, message: 'Error activando 2FA' })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+//  POST /api/auth/2fa/verify
+//  Verifica el código TOTP durante el login — usa tempToken
+// ═══════════════════════════════════════════════════════════════
+router.post('/2fa/verify', totpLimiter, async (req, res) => {
+  try {
+    const { tempToken, totpCode } = req.body
+
+    if (!tempToken || !totpCode) {
+      return res.status(400).json({ success: false, message: 'Datos incompletos' })
+    }
+
+    // Verificar el tempToken JWT
+    let payload
+    try {
+      payload = jwt.verify(tempToken, process.env.JWT_SECRET)
+      if (!payload.pending2FA) throw new Error('Token inválido')
+    } catch {
+      return res.status(401).json({ success: false, message: 'Sesión expirada. Inicia sesión de nuevo.' })
+    }
+
+    const userId = payload.id
+
+    const attempts = await checkTOTPAttempts(userId)
+    if (attempts >= 5) {
+      return res.status(429).json({ success: false, message: 'Demasiados intentos. Espera 15 minutos.' })
+    }
+
+    const user = await User.findByPk(userId)
+    if (!user || !user.two_factor_enabled) {
+      return res.status(404).json({ success: false, message: 'Usuario no encontrado' })
+    }
+
+    const isRecoveryCode = /^[A-F0-9]{4}-[A-F0-9]{4}-[A-F0-9]{4}$/.test(totpCode)
+    let verified = false
+
+    if (!isRecoveryCode) {
+      verified = speakeasy.totp.verify({
+        secret: user.two_factor_secret,
+        encoding: 'base32',
+        token: totpCode,
+        window: 1,
+      })
+    } else {
+      const [recoveryCodes] = await sequelize.query(
+        `SELECT id, code_hash FROM recovery_codes WHERE user_id = ? AND used_at IS NULL`,
+        { replacements: [userId] }
+      )
+      for (const rc of recoveryCodes) {
+        const match = await bcrypt.compare(totpCode, rc.code_hash)
+        if (match) {
+          await sequelize.query(`UPDATE recovery_codes SET used_at = NOW() WHERE id = ?`, { replacements: [rc.id] })
+          verified = true
+          break
+        }
+      }
+    }
+
+    await logTOTPAttempt(userId, verified)
+
+    if (!verified) {
+      return res.status(400).json({ success: false, message: 'Código incorrecto' })
+    }
+
+    // ✅ Emitir JWT final
+    const token = jwt.sign(
+      { id: user.id, name: user.name, role: user.role },
+      process.env.JWT_SECRET,
+      { expiresIn: process.env.JWT_EXPIRES_IN || '8h' }
+    )
+
+    res.json({
+      success: true,
+      token,
+      user: { id: user.id, name: user.name, role: user.role },
+    })
+  } catch (err) {
+    console.error('verify2FA error:', err)
+    res.status(500).json({ success: false, message: 'Error verificando código' })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+//  POST /api/auth/2fa/disable
+//  Desactiva 2FA — requiere PIN + código TOTP
+// ═══════════════════════════════════════════════════════════════
+router.post('/2fa/disable', protect, totpLimiter, async (req, res) => {
+  try {
+    const userId = req.user.id
+    const { pin, totpCode } = req.body
+
+    if (!pin || !totpCode) {
+      return res.status(400).json({ success: false, message: 'Se requiere PIN y código TOTP' })
+    }
+
+    const user = await User.findByPk(userId)
+    if (!user || !user.two_factor_enabled) {
+      return res.status(400).json({ success: false, message: '2FA no está activado' })
+    }
+
+    // Verificar PIN
+    const pinValid = await user.verifyPin(pin)
+    if (!pinValid) {
+      return res.status(401).json({ success: false, message: 'PIN incorrecto' })
+    }
+
+    // Verificar TOTP
+    const totpValid = speakeasy.totp.verify({
+      secret: user.two_factor_secret,
+      encoding: 'base32',
+      token: totpCode,
+      window: 1,
+    })
+    if (!totpValid) {
+      return res.status(400).json({ success: false, message: 'Código TOTP incorrecto' })
+    }
+
+    await sequelize.query(
+      `UPDATE users SET two_factor_enabled = FALSE, two_factor_secret = NULL, two_factor_confirmed_at = NULL WHERE id = ?`,
+      { replacements: [userId] }
+    )
+    await sequelize.query(`DELETE FROM recovery_codes WHERE user_id = ?`, { replacements: [userId] })
+
+    res.json({ success: true, message: '2FA desactivado correctamente' })
+  } catch (err) {
+    console.error('disable2FA error:', err)
+    res.status(500).json({ success: false, message: 'Error desactivando 2FA' })
+  }
+})
+
+module.exports = router

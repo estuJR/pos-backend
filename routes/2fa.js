@@ -79,13 +79,13 @@ router.get('/2fa/setup', protect, async (req, res) => {
     )
 
     const otpauthUrl = speakeasy.otpauthURL({
-      secret: secret.base32,
-      label: encodeURIComponent(`El Jardín de los Conejos:${user.name}`),
-      issuer: 'El Jardín de los Conejos POS',
-      encoding: 'base32',
-      digits: 6,
-      period: 30,
-    })
+  secret: secret.base32,
+  label: `El Jardin de los Conejos:${user.name}`,
+  issuer: "El Jardin de los Conejos",
+  encoding: "base32",
+  digits: 6,
+  period: 30,
+})
 
     const qrDataUrl = await QRCode.toDataURL(otpauthUrl, {
       width: 300,

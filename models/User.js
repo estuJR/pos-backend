@@ -12,7 +12,6 @@ const User = sequelize.define('User', {
     type: DataTypes.STRING(100),
     allowNull: false,
   },
-  // role matches frontend: "supervisor" | "empleado"
   role: {
     type: DataTypes.ENUM('supervisor', 'empleado'),
     allowNull: false,
@@ -25,6 +24,20 @@ const User = sequelize.define('User', {
   is_active: {
     type: DataTypes.BOOLEAN,
     defaultValue: true,
+  },
+  two_factor_secret: {
+    type: DataTypes.STRING(255),
+    allowNull: true,
+    defaultValue: null,
+  },
+  two_factor_enabled: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+  },
+  two_factor_confirmed_at: {
+    type: DataTypes.DATE,
+    allowNull: true,
+    defaultValue: null,
   },
 }, {
   tableName: 'users',

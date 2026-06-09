@@ -79,13 +79,13 @@ router.get('/2fa/setup', protect, async (req, res) => {
     )
 
     const otpauthUrl = speakeasy.otpauthURL({
-  secret: secret.base32,
-  label: `El Jardin de los Conejos:${user.name}`,
-  issuer: "El Jardin de los Conejos",
-  encoding: "base32",
-  digits: 6,
-  period: 30,
-})
+      secret: secret.base32,
+      label: encodeURIComponent(`El Jardín de los Conejos:${user.name}`),
+      issuer: 'El Jardín de los Conejos POS',
+      encoding: 'base32',
+      digits: 6,
+      period: 30,
+    })
 
     const qrDataUrl = await QRCode.toDataURL(otpauthUrl, {
       width: 300,
@@ -134,7 +134,7 @@ router.post('/2fa/enable', protect, totpLimiter, async (req, res) => {
       secret: userData.two_factor_secret,
       encoding: 'base32',
       token,
-      window: 2,
+      window: 1,
     })
 
     await logTOTPAttempt(userId, verified)
@@ -207,7 +207,7 @@ router.post('/2fa/verify', totpLimiter, async (req, res) => {
         secret: user.two_factor_secret,
         encoding: 'base32',
         token: totpCode,
-        window: 2,
+        window: 1,
       })
     } else {
       const [recoveryCodes] = await sequelize.query(
@@ -277,7 +277,7 @@ router.post('/2fa/disable', protect, totpLimiter, async (req, res) => {
       secret: user.two_factor_secret,
       encoding: 'base32',
       token: totpCode,
-      window: 2,
+      window: 1,
     })
     if (!totpValid) {
       return res.status(400).json({ success: false, message: 'Código TOTP incorrecto' })
@@ -293,6 +293,22 @@ router.post('/2fa/disable', protect, totpLimiter, async (req, res) => {
   } catch (err) {
     console.error('disable2FA error:', err)
     res.status(500).json({ success: false, message: 'Error desactivando 2FA' })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+//  GET /api/auth/2fa/status
+//  Consulta si el usuario tiene 2FA activo
+// ═══════════════════════════════════════════════════════════════
+router.get('/2fa/status', protect, async (req, res) => {
+  try {
+    const [rows] = await sequelize.query(
+      'SELECT two_factor_enabled FROM users WHERE id = ?',
+      { replacements: [req.user.id] }
+    )
+    res.json({ success: true, enabled: !!rows[0]?.two_factor_enabled })
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Error consultando estado 2FA' })
   }
 })
 

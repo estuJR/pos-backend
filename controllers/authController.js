@@ -1,8 +1,9 @@
 const jwt = require('jsonwebtoken');
+const speakeasy = require('speakeasy');
 const { User } = require('../models');
 
 // POST /api/auth/login
-// Body: { role: "supervisor"|"empleado", pin: "1234" }
+// Body: { role: "supervisor"|"empleado", pin: "1234" o código TOTP de 6 dígitos }
 const login = async (req, res) => {
   try {
     const { role, pin } = req.body;
@@ -20,13 +21,28 @@ const login = async (req, res) => {
       return res.status(401).json({ success: false, message: 'PIN incorrecto' });
     }
 
-    // Verificar PIN contra cada usuario del rol
     let authenticatedUser = null;
+
     for (const user of users) {
-      const valid = await user.verifyPin(pin);
-      if (valid) {
-        authenticatedUser = user;
-        break;
+      // ── Si el usuario tiene 2FA activo y el PIN tiene 6 dígitos ──
+      if (user.two_factor_enabled && user.two_factor_secret && /^\d{6}$/.test(String(pin))) {
+        const totpValid = speakeasy.totp.verify({
+          secret: user.two_factor_secret,
+          encoding: 'base32',
+          token: String(pin),
+          window: 1,
+        });
+        if (totpValid) {
+          authenticatedUser = user;
+          break;
+        }
+      } else {
+        // Login normal con PIN
+        const valid = await user.verifyPin(pin);
+        if (valid) {
+          authenticatedUser = user;
+          break;
+        }
       }
     }
 
@@ -34,24 +50,7 @@ const login = async (req, res) => {
       return res.status(401).json({ success: false, message: 'PIN incorrecto' });
     }
 
-    // ── 2FA: Solo supervisores con 2FA activado ──────────────────
-    if (authenticatedUser.role === 'supervisor' && authenticatedUser.two_factor_enabled) {
-      // Generar token temporal (5 minutos) para completar el 2FA
-      const tempToken = jwt.sign(
-        { id: authenticatedUser.id, pending2FA: true },
-        process.env.JWT_SECRET,
-        { expiresIn: '5m' }
-      );
-
-      return res.json({
-        success: true,
-        requires2FA: true,
-        tempToken,
-      });
-    }
-    // ─────────────────────────────────────────────────────────────
-
-    // Sin 2FA → generar JWT normal
+    // Generar JWT
     const token = jwt.sign(
       {
         id: authenticatedUser.id,
@@ -69,6 +68,7 @@ const login = async (req, res) => {
         id: authenticatedUser.id,
         name: authenticatedUser.name,
         role: authenticatedUser.role,
+        twoFactorEnabled: authenticatedUser.two_factor_enabled,
       },
     });
   } catch (error) {
@@ -76,12 +76,12 @@ const login = async (req, res) => {
   }
 };
 
-// GET /api/auth/me — validar token actual
+// GET /api/auth/me
 const me = async (req, res) => {
   res.json({ success: true, user: req.user });
 };
 
-// GET /api/auth/users — listar usuarios para la pantalla de login
+// GET /api/auth/users
 const getUsers = async (req, res) => {
   try {
     const users = await User.findAll({

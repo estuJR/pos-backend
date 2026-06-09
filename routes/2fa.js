@@ -297,6 +297,52 @@ router.post('/2fa/disable', protect, totpLimiter, async (req, res) => {
 })
 
 // ═══════════════════════════════════════════════════════════════
+//  POST /api/auth/2fa/verify-login
+//  Verifica TOTP después del login con PIN — requiere JWT temporal
+// ═══════════════════════════════════════════════════════════════
+router.post('/2fa/verify-login', protect, totpLimiter, async (req, res) => {
+  try {
+    const userId = req.user.id
+    const { totpCode } = req.body
+
+    if (!totpCode || !/^\d{6}$/.test(totpCode)) {
+      return res.status(400).json({ success: false, message: 'Código inválido' })
+    }
+
+    const attempts = await checkTOTPAttempts(userId)
+    if (attempts >= 5) {
+      return res.status(429).json({ success: false, message: 'Demasiados intentos. Espera 15 minutos.' })
+    }
+
+    const [rows] = await sequelize.query(
+      'SELECT two_factor_secret FROM users WHERE id = ? AND two_factor_enabled = TRUE',
+      { replacements: [userId] }
+    )
+    if (!rows[0]?.two_factor_secret) {
+      return res.status(400).json({ success: false, message: '2FA no está activo' })
+    }
+
+    const verified = speakeasy.totp.verify({
+      secret: rows[0].two_factor_secret,
+      encoding: 'base32',
+      token: totpCode,
+      window: 2,
+    })
+
+    await logTOTPAttempt(userId, verified)
+
+    if (!verified) {
+      return res.status(400).json({ success: false, message: 'Código incorrecto' })
+    }
+
+    res.json({ success: true })
+  } catch (err) {
+    console.error('verify-login error:', err)
+    res.status(500).json({ success: false, message: 'Error verificando código' })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
 //  GET /api/auth/2fa/status
 //  Consulta si el usuario tiene 2FA activo
 // ═══════════════════════════════════════════════════════════════

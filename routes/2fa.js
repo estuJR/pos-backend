@@ -134,7 +134,7 @@ router.post('/2fa/enable', protect, totpLimiter, async (req, res) => {
       secret: userData.two_factor_secret,
       encoding: 'base32',
       token,
-      window: 1,
+      window: 2,
     })
 
     await logTOTPAttempt(userId, verified)
@@ -207,7 +207,7 @@ router.post('/2fa/verify', totpLimiter, async (req, res) => {
         secret: user.two_factor_secret,
         encoding: 'base32',
         token: totpCode,
-        window: 1,
+        window: 2,
       })
     } else {
       const [recoveryCodes] = await sequelize.query(
@@ -277,7 +277,7 @@ router.post('/2fa/disable', protect, totpLimiter, async (req, res) => {
       secret: user.two_factor_secret,
       encoding: 'base32',
       token: totpCode,
-      window: 1,
+      window: 2,
     })
     if (!totpValid) {
       return res.status(400).json({ success: false, message: 'Código TOTP incorrecto' })

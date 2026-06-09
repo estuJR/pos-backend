@@ -15,6 +15,7 @@ const inventoryRoutes = require('./routes/inventory');
 const tableRoutes = require('./routes/tables');
 const dailySummaryRoutes = require('./routes/dailySummary');
 const twoFactorRoutes = require('./routes/2fa');
+const posTransactionsRoutes = require('./routes/pos-transactions');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -53,6 +54,7 @@ app.get('/api/health', (req, res) => {
 
 app.use('/api/auth', authRoutes);
 app.use('/api/auth', twoFactorRoutes);
+app.use('/api/pos-transactions', posTransactionsRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/menu', menuRoutes);
 app.use('/api/tables', tableRoutes);

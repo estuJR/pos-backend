@@ -1,6 +1,7 @@
 const express = require('express')
 const router = express.Router()
 const { sequelize } = require('../config/database')
+const { protect, requireSupervisor } = require('../middleware/auth')
 
 // ═══════════════════════════════════════════════════════════════
 //  POST /api/pos-transactions
@@ -108,6 +109,30 @@ router.get('/days', async (req, res) => {
     res.json({ success: true, data: days })
   } catch (err) {
     console.error('pos-transactions GET days error:', err)
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+//  DELETE /api/pos-transactions?date=2026-06-09
+//  Borra transacciones de un día (solo supervisor)
+// ═══════════════════════════════════════════════════════════════
+router.delete('/', protect, requireSupervisor, async (req, res) => {
+  try {
+    const date = req.query.date || new Date().toISOString().slice(0, 10)
+
+    const [result] = await sequelize.query(
+      `DELETE FROM pos_transactions WHERE transaction_date = ?`,
+      { replacements: [date] }
+    )
+
+    res.json({
+      success: true,
+      message: `Transacciones del ${date} eliminadas`,
+      deleted: result.affectedRows
+    })
+  } catch (err) {
+    console.error('pos-transactions DELETE error:', err)
     res.status(500).json({ success: false, message: err.message })
   }
 })

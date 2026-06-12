@@ -55,7 +55,9 @@ async function logTOTPAttempt(userId, success) {
 
 // ═══════════════════════════════════════════════════════════════
 //  GET /api/auth/2fa/setup
-//  Genera el QR para escanear — requiere JWT normal
+//  Genera (o reutiliza) el QR para escanear — requiere JWT normal
+//  El secret se genera UNA SOLA VEZ por usuario y se reutiliza
+//  siempre, así el QR nunca cambia entre activaciones/desactivaciones.
 // ═══════════════════════════════════════════════════════════════
 router.get('/2fa/setup', protect, async (req, res) => {
   try {
@@ -66,20 +68,30 @@ router.get('/2fa/setup', protect, async (req, res) => {
     if (user.role !== 'supervisor') return res.status(403).json({ success: false, message: 'Solo supervisores pueden activar 2FA' })
     if (user.two_factor_enabled) return res.status(400).json({ success: false, message: '2FA ya está activado' })
 
-    const secret = speakeasy.generateSecret({
-      name: `El Jardín de los Conejos:${user.name}`,
-      issuer: 'El Jardín de los Conejos POS',
-      length: 20,
-    })
-
-    // Guardar secret temporalmente (aún no activado)
-    await sequelize.query(
-      `UPDATE users SET two_factor_secret = ? WHERE id = ?`,
-      { replacements: [secret.base32, userId] }
+    // Reutilizar el secret existente si ya se generó antes (mismo QR siempre)
+    const [rows] = await sequelize.query(
+      `SELECT two_factor_secret FROM users WHERE id = ?`,
+      { replacements: [userId] }
     )
 
+    let secretBase32 = rows[0]?.two_factor_secret
+
+    if (!secretBase32) {
+      const secret = speakeasy.generateSecret({
+        name: `El Jardín de los Conejos:${user.name}`,
+        issuer: 'El Jardín de los Conejos POS',
+        length: 20,
+      })
+      secretBase32 = secret.base32
+
+      await sequelize.query(
+        `UPDATE users SET two_factor_secret = ? WHERE id = ?`,
+        { replacements: [secretBase32, userId] }
+      )
+    }
+
     const otpauthUrl = speakeasy.otpauthURL({
-      secret: secret.base32,
+      secret: secretBase32,
       label: encodeURIComponent(`El Jardín de los Conejos:${user.name}`),
       issuer: 'El Jardín de los Conejos POS',
       encoding: 'base32',
@@ -93,7 +105,7 @@ router.get('/2fa/setup', protect, async (req, res) => {
       color: { dark: '#2C1810', light: '#FFFFFF' },
     })
 
-    res.json({ success: true, qrCode: qrDataUrl, manualCode: secret.base32 })
+    res.json({ success: true, qrCode: qrDataUrl, manualCode: secretBase32 })
   } catch (err) {
     console.error('setup2FA error:', err)
     res.status(500).json({ success: false, message: 'Error generando 2FA' })
@@ -143,23 +155,36 @@ router.post('/2fa/enable', protect, totpLimiter, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Código incorrecto. Verifica la hora de tu iPhone.' })
     }
 
-    // Activar 2FA + generar códigos de recuperación
-    const { codes, hashes } = await generateRecoveryCodes()
-
+    // Activar 2FA. El secret NO se toca — se conserva para que el QR
+    // sea siempre el mismo si se vuelve a generar.
     await sequelize.query(
       `UPDATE users SET two_factor_enabled = TRUE, two_factor_confirmed_at = NOW() WHERE id = ?`,
       { replacements: [userId] }
     )
 
-    await sequelize.query(`DELETE FROM recovery_codes WHERE user_id = ?`, { replacements: [userId] })
-    for (const hash of hashes) {
-      await sequelize.query(
-        `INSERT INTO recovery_codes (user_id, code_hash) VALUES (?, ?)`,
-        { replacements: [userId, hash] }
-      )
+    // Generar códigos de recuperación SOLO si no existen aún
+    const [existingCodes] = await sequelize.query(
+      `SELECT COUNT(*) as count FROM recovery_codes WHERE user_id = ?`,
+      { replacements: [userId] }
+    )
+
+    let codes = null
+    if (existingCodes[0].count === 0) {
+      const generated = await generateRecoveryCodes()
+      codes = generated.codes
+      for (const hash of generated.hashes) {
+        await sequelize.query(
+          `INSERT INTO recovery_codes (user_id, code_hash) VALUES (?, ?)`,
+          { replacements: [userId, hash] }
+        )
+      }
     }
 
-    res.json({ success: true, message: '2FA activado correctamente', recoveryCodes: codes })
+    res.json({
+      success: true,
+      message: '2FA activado correctamente',
+      ...(codes ? { recoveryCodes: codes } : {}),
+    })
   } catch (err) {
     console.error('enable2FA error:', err)
     res.status(500).json({ success: false, message: 'Error activando 2FA' })
@@ -251,6 +276,8 @@ router.post('/2fa/verify', totpLimiter, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 //  POST /api/auth/2fa/disable
 //  Desactiva 2FA — requiere PIN + código TOTP
+//  IMPORTANTE: NO borra el secret ni los códigos de recuperación,
+//  para que al reactivar se use el MISMO QR.
 // ═══════════════════════════════════════════════════════════════
 router.post('/2fa/disable', protect, totpLimiter, async (req, res) => {
   try {
@@ -283,11 +310,11 @@ router.post('/2fa/disable', protect, totpLimiter, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Código TOTP incorrecto' })
     }
 
+    // Solo apagar el flag. El secret se mantiene para reactivar con el mismo QR.
     await sequelize.query(
-      `UPDATE users SET two_factor_enabled = FALSE, two_factor_secret = NULL, two_factor_confirmed_at = NULL WHERE id = ?`,
+      `UPDATE users SET two_factor_enabled = FALSE, two_factor_confirmed_at = NULL WHERE id = ?`,
       { replacements: [userId] }
     )
-    await sequelize.query(`DELETE FROM recovery_codes WHERE user_id = ?`, { replacements: [userId] })
 
     res.json({ success: true, message: '2FA desactivado correctamente' })
   } catch (err) {

@@ -87,6 +87,100 @@ router.get('/stats', async (req, res) => {
 })
 
 // ═══════════════════════════════════════════════════════════════
+//  GET /api/pos-transactions/stats-range?from=2026-06-01&to=2026-06-12
+//  Estadísticas agregadas por rango de fechas: resumen, productos
+//  (cantidad + ventas netas) y categorías (cantidad + ventas netas).
+//  Si no se envían parámetros, usa el día de hoy en ambos extremos.
+// ═══════════════════════════════════════════════════════════════
+router.get('/stats-range', async (req, res) => {
+  try {
+    const today = new Date().toISOString().slice(0, 10)
+    const from = req.query.from || today
+    const to = req.query.to || today
+
+    // Resumen y desglose por método de pago
+    const [summary] = await sequelize.query(
+      `SELECT 
+         COUNT(*) as total_transactions,
+         COALESCE(SUM(amount), 0) as total_revenue,
+         COALESCE(SUM(CASE WHEN method = 'efectivo' THEN amount ELSE 0 END), 0) as efectivo,
+         COALESCE(SUM(CASE WHEN method = 'tarjeta' THEN amount ELSE 0 END), 0) as tarjeta,
+         COALESCE(SUM(CASE WHEN method = 'transferencia' THEN amount ELSE 0 END), 0) as transferencia
+       FROM pos_transactions WHERE transaction_date BETWEEN ? AND ?`,
+      { replacements: [from, to] }
+    )
+
+    // Ventas por día (para la gráfica)
+    const [byDay] = await sequelize.query(
+      `SELECT 
+         transaction_date as date,
+         COALESCE(SUM(amount), 0) as total_revenue,
+         COALESCE(SUM(CASE WHEN method = 'efectivo' THEN amount ELSE 0 END), 0) as efectivo,
+         COALESCE(SUM(CASE WHEN method = 'tarjeta' THEN amount ELSE 0 END), 0) as tarjeta,
+         COALESCE(SUM(CASE WHEN method = 'transferencia' THEN amount ELSE 0 END), 0) as transferencia
+       FROM pos_transactions WHERE transaction_date BETWEEN ? AND ?
+       GROUP BY transaction_date
+       ORDER BY transaction_date ASC`,
+      { replacements: [from, to] }
+    )
+
+    // Items de todas las transacciones del rango
+    const [transactions] = await sequelize.query(
+      `SELECT items, amount FROM pos_transactions WHERE transaction_date BETWEEN ? AND ?`,
+      { replacements: [from, to] }
+    )
+
+    // Agregar por artículo individual
+    const productMap = {}
+    // Agregar por categoría
+    const categoryMap = {}
+
+    for (const tx of transactions) {
+      let items = tx.items
+      if (typeof items === 'string') {
+        try { items = JSON.parse(items) } catch { continue }
+      }
+      if (!Array.isArray(items)) continue
+
+      for (const item of items) {
+        const name = item.name
+        const category = item.category || 'otros'
+        const qty = item.quantity || 1
+        // El total guardado por transacción es el cobro total (puede incluir varios
+        // artículos), así que aquí no tenemos el precio unitario garantizado.
+        // Si el item trae 'price' o 'amount' lo usamos; si no, dejamos revenue en 0
+        // para esa línea (se puede mejorar si el frontend empieza a mandar precio).
+        const lineRevenue = (item.price ? item.price * qty : 0)
+
+        if (!productMap[name]) productMap[name] = { name, category, quantity: 0, revenue: 0 }
+        productMap[name].quantity += qty
+        productMap[name].revenue += lineRevenue
+
+        if (!categoryMap[category]) categoryMap[category] = { category, quantity: 0, revenue: 0 }
+        categoryMap[category].quantity += qty
+        categoryMap[category].revenue += lineRevenue
+      }
+    }
+
+    const products = Object.values(productMap).sort((a, b) => b.quantity - a.quantity)
+    const categories = Object.values(categoryMap).sort((a, b) => b.quantity - a.quantity)
+
+    res.json({
+      success: true,
+      from,
+      to,
+      summary: summary[0],
+      byDay,
+      products,
+      categories,
+    })
+  } catch (err) {
+    console.error('pos-transactions GET stats-range error:', err)
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
 //  GET /api/pos-transactions/days
 //  Lista de días con ventas (últimos 60 días)
 // ═══════════════════════════════════════════════════════════════

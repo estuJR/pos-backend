@@ -4,6 +4,21 @@ const { sequelize } = require('../config/database')
 const { protect, requireSupervisor } = require('../middleware/auth')
 
 // ═══════════════════════════════════════════════════════════════
+//  Devuelve la fecha actual (YYYY-MM-DD) en horario de Guatemala
+//  (UTC-6, sin horario de verano), en vez de usar UTC directamente.
+// ═══════════════════════════════════════════════════════════════
+function todayGT() {
+  const now = new Date()
+  // Formatea la fecha directamente en la zona horaria de Guatemala
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Guatemala',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now)
+}
+
+// ═══════════════════════════════════════════════════════════════
 //  POST /api/pos-transactions
 //  Guarda un pago del POS frontend
 // ═══════════════════════════════════════════════════════════════
@@ -15,7 +30,7 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Datos incompletos' })
     }
 
-    const today = new Date().toISOString().slice(0, 10)
+    const today = todayGT()
 
     await sequelize.query(
       `INSERT INTO pos_transactions (transaction_date, table_number, person, method, amount, items, user_name)
@@ -36,7 +51,7 @@ router.post('/', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 router.get('/stats', async (req, res) => {
   try {
-    const date = req.query.date || new Date().toISOString().slice(0, 10)
+    const date = req.query.date || todayGT()
 
     // Total y conteo
     const [summary] = await sequelize.query(
@@ -94,7 +109,7 @@ router.get('/stats', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 router.get('/stats-range', async (req, res) => {
   try {
-    const today = new Date().toISOString().slice(0, 10)
+    const today = todayGT()
     const from = req.query.from || today
     const to = req.query.to || today
 
@@ -213,7 +228,7 @@ router.get('/days', async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 router.delete('/', protect, requireSupervisor, async (req, res) => {
   try {
-    const date = req.query.date || new Date().toISOString().slice(0, 10)
+    const date = req.query.date || todayGT()
 
     const [result] = await sequelize.query(
       `DELETE FROM pos_transactions WHERE transaction_date = ?`,

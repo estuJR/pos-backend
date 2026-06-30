@@ -196,6 +196,100 @@ router.get('/stats-range', async (req, res) => {
 })
 
 // ═══════════════════════════════════════════════════════════════
+//  POST /api/pos-transactions/expenses
+//  Registra un gasto operativo del día (Gastos del día)
+// ═══════════════════════════════════════════════════════════════
+router.post('/expenses', async (req, res) => {
+  try {
+    const { description, amount, userName, date } = req.body
+
+    if (!description || !amount) {
+      return res.status(400).json({ success: false, message: 'Datos incompletos' })
+    }
+
+    const expenseDate = date || todayGT()
+
+    await sequelize.query(
+      `INSERT INTO pos_expenses (expense_date, description, amount, user_name)
+       VALUES (?, ?, ?, ?)`,
+      { replacements: [expenseDate, description, amount, userName || ''] }
+    )
+
+    res.json({ success: true, message: 'Gasto guardado' })
+  } catch (err) {
+    console.error('pos-transactions POST expenses error:', err)
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+//  GET /api/pos-transactions/expenses?date=2026-06-30
+//  Lista de gastos de un día específico, con el total
+// ═══════════════════════════════════════════════════════════════
+router.get('/expenses', async (req, res) => {
+  try {
+    const date = req.query.date || todayGT()
+
+    const [expenses] = await sequelize.query(
+      `SELECT id, expense_date, description, amount, user_name, created_at
+       FROM pos_expenses WHERE expense_date = ?
+       ORDER BY created_at DESC`,
+      { replacements: [date] }
+    )
+
+    const total = expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0)
+
+    res.json({ success: true, date, data: expenses, total })
+  } catch (err) {
+    console.error('pos-transactions GET expenses error:', err)
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+//  GET /api/pos-transactions/expenses-range?from=&to=
+//  Gastos agregados por rango de fechas (para Excel y reportes)
+// ═══════════════════════════════════════════════════════════════
+router.get('/expenses-range', async (req, res) => {
+  try {
+    const today = todayGT()
+    const from = req.query.from || today
+    const to = req.query.to || today
+
+    const [expenses] = await sequelize.query(
+      `SELECT id, expense_date, description, amount, user_name, created_at
+       FROM pos_expenses WHERE expense_date BETWEEN ? AND ?
+       ORDER BY expense_date ASC, created_at ASC`,
+      { replacements: [from, to] }
+    )
+
+    const total = expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0)
+
+    res.json({ success: true, from, to, data: expenses, total })
+  } catch (err) {
+    console.error('pos-transactions GET expenses-range error:', err)
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+//  DELETE /api/pos-transactions/expenses/:id
+//  Elimina un gasto (solo supervisor)
+// ═══════════════════════════════════════════════════════════════
+router.delete('/expenses/:id', protect, requireSupervisor, async (req, res) => {
+  try {
+    const { id } = req.params
+
+    await sequelize.query(`DELETE FROM pos_expenses WHERE id = ?`, { replacements: [id] })
+
+    res.json({ success: true, message: 'Gasto eliminado' })
+  } catch (err) {
+    console.error('pos-transactions DELETE expense error:', err)
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
 //  GET /api/pos-transactions/days
 //  Lista de días con ventas (últimos 60 días)
 // ═══════════════════════════════════════════════════════════════

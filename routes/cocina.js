@@ -8,7 +8,6 @@ const { QueryTypes } = require('sequelize')
 router.get('/order-number/:orderId', async (req, res) => {
   const { orderId } = req.params
   try {
-    // ¿Ya tiene número asignado?
     const existing = await sequelize.query(
       'SELECT cocina_number FROM cocina_order_numbers WHERE order_id = ?',
       { replacements: [orderId], type: QueryTypes.SELECT }
@@ -17,7 +16,25 @@ router.get('/order-number/:orderId', async (req, res) => {
       return res.json({ success: true, cocina_number: existing[0].cocina_number })
     }
 
-    // No tiene — incrementar el contador y asignar
+    // Obtener datos de la orden para guardar snapshot
+    const orderData = await sequelize.query(
+      `SELECT o.id, o.opened_at, t.name AS table_name,
+              JSON_ARRAYAGG(JSON_OBJECT(
+                'product_name', oi.product_name,
+                'quantity', oi.quantity,
+                'notes', oi.notes
+              )) AS items
+       FROM orders o
+       LEFT JOIN tables t ON t.id = o.table_id
+       LEFT JOIN order_items oi ON oi.order_id = o.id
+       WHERE o.id = ?
+       GROUP BY o.id, o.opened_at, t.name`,
+      { replacements: [orderId], type: QueryTypes.SELECT }
+    )
+
+    const order = orderData[0] || {}
+
+    // Incrementar contador
     await sequelize.query(
       'UPDATE cocina_counter SET last_number = last_number + 1 WHERE id = 1'
     )
@@ -25,10 +42,12 @@ router.get('/order-number/:orderId', async (req, res) => {
       'SELECT last_number FROM cocina_counter WHERE id = 1',
       { type: QueryTypes.SELECT }
     )
+
     await sequelize.query(
-      'INSERT INTO cocina_order_numbers (order_id, cocina_number) VALUES (?, ?)',
-      { replacements: [orderId, last_number] }
+      'INSERT INTO cocina_order_numbers (order_id, cocina_number, table_name, items_snapshot) VALUES (?, ?, ?, ?)',
+      { replacements: [orderId, last_number, order.table_name || 'Sin mesa', JSON.stringify(order.items || [])] }
     )
+
     return res.json({ success: true, cocina_number: last_number })
   } catch (err) {
     console.error('Error cocina number:', err)
@@ -36,20 +55,51 @@ router.get('/order-number/:orderId', async (req, res) => {
   }
 })
 
-// GET /api/cocina/history — historial de órdenes de cocina
+// PATCH /api/cocina/complete/:orderId
+// Marca una orden como completada en el historial
+router.patch('/complete/:orderId', async (req, res) => {
+  const { orderId } = req.params
+  try {
+    await sequelize.query(
+      'UPDATE cocina_order_numbers SET completed_at = NOW() WHERE order_id = ?',
+      { replacements: [orderId] }
+    )
+    res.json({ success: true })
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// GET /api/cocina/history — historial completo con productos
 router.get('/history', async (req, res) => {
   try {
     const rows = await sequelize.query(
-      `SELECT cn.cocina_number, cn.order_id, cn.created_at,
-              o.status, t.name AS table_name
+      `SELECT 
+         cn.cocina_number,
+         cn.order_id,
+         cn.table_name,
+         cn.items_snapshot,
+         cn.completed_at,
+         cn.created_at,
+         o.status,
+         o.opened_at,
+         o.total
        FROM cocina_order_numbers cn
        LEFT JOIN orders o ON o.id = cn.order_id
-       LEFT JOIN tables t ON t.id = o.table_id
        ORDER BY cn.cocina_number DESC
-       LIMIT 100`,
+       LIMIT 200`,
       { type: QueryTypes.SELECT }
     )
-    res.json({ success: true, data: rows })
+
+    // Parsear items_snapshot si viene como string
+    const data = rows.map(r => ({
+      ...r,
+      items_snapshot: typeof r.items_snapshot === 'string'
+        ? JSON.parse(r.items_snapshot)
+        : (r.items_snapshot || [])
+    }))
+
+    res.json({ success: true, data })
   } catch (err) {
     res.status(500).json({ success: false, message: err.message })
   }

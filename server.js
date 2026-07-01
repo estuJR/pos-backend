@@ -16,6 +16,7 @@ const tableRoutes = require('./routes/tables');
 const dailySummaryRoutes = require('./routes/dailySummary');
 const twoFactorRoutes = require('./routes/2fa');
 const posTransactionsRoutes = require('./routes/pos-transactions');
+const cocinaRoutes = require('./routes/cocina');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -25,13 +26,13 @@ const PORT = process.env.PORT || 5000;
 // ========================
 app.use(cors({
   origin: [
-  'http://localhost:3000',
-  'http://localhost:3001',
-  'http://localhost:4000',
-  'http://localhost:5173',
-  'https://jardindelosconejos.vercel.app',
-  process.env.FRONTEND_URL,
-].filter(Boolean),
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'http://localhost:4000',
+    'http://localhost:5173',
+    'https://jardindelosconejos.vercel.app',
+    process.env.FRONTEND_URL,
+  ].filter(Boolean),
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
@@ -63,6 +64,7 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/daily', dailySummaryRoutes);
+app.use('/api/cocina', cocinaRoutes);
 
 // ========================
 //    ERROR HANDLERS
@@ -92,4 +94,4 @@ const start = async () => {
   });
 };
 
-start(); 
+start();

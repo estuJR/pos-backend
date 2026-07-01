@@ -293,7 +293,7 @@ router.delete('/expenses/:id', protect, requireSupervisor, async (req, res) => {
 //  POST /api/pos-transactions/cierre
 //  Guarda (o actualiza, si ya existe) el cuadre de caja de un día
 // ═══════════════════════════════════════════════════════════════
-router.post('/cierre', protect, requireSupervisor, async (req, res) => {
+router.post('/cierre', protect, async (req, res) => {
   try {
     const {
       date,

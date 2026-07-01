@@ -290,6 +290,79 @@ router.delete('/expenses/:id', protect, requireSupervisor, async (req, res) => {
 })
 
 // ═══════════════════════════════════════════════════════════════
+//  POST /api/pos-transactions/cierre
+//  Guarda (o actualiza, si ya existe) el cuadre de caja de un día
+// ═══════════════════════════════════════════════════════════════
+router.post('/cierre', protect, requireSupervisor, async (req, res) => {
+  try {
+    const {
+      date,
+      fondoInicial, cobrosEfectivo, reembolsosEfectivo, gastosDia,
+      efectivoTeorico, efectivoReal, descuadre, ventasBrutas, ventasNetas,
+      efectivo, tarjeta, transferencia, gananciaNeta, userName,
+    } = req.body
+
+    const cierreDate = date || todayGT()
+
+    await sequelize.query(
+      `INSERT INTO pos_cierres
+        (cierre_date, fondo_inicial, cobros_efectivo, reembolsos_efectivo, gastos_dia,
+         efectivo_teorico, efectivo_real, descuadre, ventas_brutas, ventas_netas,
+         efectivo, tarjeta, transferencia, ganancia_neta, user_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         fondo_inicial = VALUES(fondo_inicial),
+         cobros_efectivo = VALUES(cobros_efectivo),
+         reembolsos_efectivo = VALUES(reembolsos_efectivo),
+         gastos_dia = VALUES(gastos_dia),
+         efectivo_teorico = VALUES(efectivo_teorico),
+         efectivo_real = VALUES(efectivo_real),
+         descuadre = VALUES(descuadre),
+         ventas_brutas = VALUES(ventas_brutas),
+         ventas_netas = VALUES(ventas_netas),
+         efectivo = VALUES(efectivo),
+         tarjeta = VALUES(tarjeta),
+         transferencia = VALUES(transferencia),
+         ganancia_neta = VALUES(ganancia_neta),
+         user_name = VALUES(user_name)`,
+      {
+        replacements: [
+          cierreDate,
+          fondoInicial || 0, cobrosEfectivo || 0, reembolsosEfectivo || 0, gastosDia || 0,
+          efectivoTeorico || 0, efectivoReal || 0, descuadre || 0, ventasBrutas || 0, ventasNetas || 0,
+          efectivo || 0, tarjeta || 0, transferencia || 0, gananciaNeta || 0, userName || '',
+        ],
+      }
+    )
+
+    res.json({ success: true, message: 'Cierre guardado' })
+  } catch (err) {
+    console.error('pos-transactions POST cierre error:', err)
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
+//  GET /api/pos-transactions/cierre?date=2026-06-30
+//  Obtiene el cuadre de caja guardado de un día (si existe)
+// ═══════════════════════════════════════════════════════════════
+router.get('/cierre', async (req, res) => {
+  try {
+    const date = req.query.date || todayGT()
+
+    const [rows] = await sequelize.query(
+      `SELECT * FROM pos_cierres WHERE cierre_date = ? LIMIT 1`,
+      { replacements: [date] }
+    )
+
+    res.json({ success: true, date, data: rows[0] || null })
+  } catch (err) {
+    console.error('pos-transactions GET cierre error:', err)
+    res.status(500).json({ success: false, message: err.message })
+  }
+})
+
+// ═══════════════════════════════════════════════════════════════
 //  GET /api/pos-transactions/days
 //  Lista de días con ventas (últimos 60 días)
 // ═══════════════════════════════════════════════════════════════

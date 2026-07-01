@@ -104,7 +104,7 @@ const getOrderById = async (req, res) => {
 const createOrder = async (req, res) => {
   const t = await sequelize.transaction();
   try {
-    const { table_id, customer_name, customer_count, type, notes, items } = req.body;
+    const { table_id, table_name, customer_name, customer_count, type, notes, items } = req.body;
 
     if (!items || items.length === 0) {
       await t.rollback();
@@ -112,12 +112,28 @@ const createOrder = async (req, res) => {
     }
 
     let subtotal = 0;
-    const taxRate = parseFloat(process.env.RESTAURANT_TAX || 0.12);
+    const taxRate = parseFloat(process.env.RESTAURANT_TAX || 0);
     const orderItemsData = [];
 
     for (const item of items) {
+      // Modo POS web: sin product_id, usa product_name y unit_price directamente
+      if (!item.product_id) {
+        const unitPrice = parseFloat(item.unit_price) || 0;
+        const itemSubtotal = unitPrice * item.quantity;
+        subtotal += itemSubtotal;
+        orderItemsData.push({
+          product_id: null,
+          product_name: item.product_name || 'Producto',
+          unit_price: unitPrice,
+          quantity: item.quantity,
+          subtotal: itemSubtotal,
+          notes: item.notes || null,
+        });
+        continue;
+      }
+
+      // Modo app nativa: con product_id, valida contra DB
       const product = await Product.findByPk(item.product_id, { transaction: t });
-      // FIX: solo rechazar si explícitamente false (no si es null)
       if (!product || product.is_available === false) {
         await t.rollback();
         return res.status(400).json({ success: false, message: `Producto ${item.product_id} no disponible` });
@@ -142,10 +158,23 @@ const createOrder = async (req, res) => {
     const orderCount = await Order.count();
     const order_number = 'ORD-' + dateStr + '-' + String(orderCount + 1).padStart(4, '0');
 
+    // Resolver table_id: puede venir directo o buscar por table_name (ej. "Mesa 2")
+    let resolvedTableId = table_id || null;
+    let resolvedTableName = customer_name || table_name || null;
+    if (!resolvedTableId && table_name) {
+      try {
+        const tableNum = table_name.replace(/[^0-9]/g, '');
+        if (tableNum) {
+          const foundTable = await Table.findOne({ where: { number: tableNum }, transaction: t });
+          if (foundTable) resolvedTableId = foundTable.id;
+        }
+      } catch (_) {}
+    }
+
     const order = await Order.create({
       order_number,
-      table_id: table_id || null,
-      customer_name,
+      table_id: resolvedTableId,
+      customer_name: resolvedTableName,
       customer_count: customer_count || 1,
       type: type || 'dine_in',
       notes,
@@ -158,7 +187,9 @@ const createOrder = async (req, res) => {
     const itemsWithOrderId = orderItemsData.map(item => ({ ...item, order_id: order.id }));
     await OrderItem.bulkCreate(itemsWithOrderId, { transaction: t });
 
+    // Solo actualizar stock para items con product_id
     for (const item of items) {
+      if (!item.product_id) continue;
       const product = await Product.findByPk(item.product_id, { transaction: t });
       if (product && product.stock !== null && product.stock !== undefined) {
         const newStock = Math.max(0, product.stock - item.quantity);
@@ -166,8 +197,8 @@ const createOrder = async (req, res) => {
       }
     }
 
-    if (table_id) {
-      await Table.update({ status: 'occupied' }, { where: { id: table_id }, transaction: t });
+    if (resolvedTableId) {
+      await Table.update({ status: 'occupied' }, { where: { id: resolvedTableId }, transaction: t });
     }
 
     await t.commit();

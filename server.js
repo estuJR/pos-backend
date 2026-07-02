@@ -17,6 +17,7 @@ const dailySummaryRoutes = require('./routes/dailySummary');
 const twoFactorRoutes = require('./routes/2fa');
 const posTransactionsRoutes = require('./routes/pos-transactions');
 const cocinaRoutes = require('./routes/cocina');
+const exportRoutes = require('./routes/export');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -65,6 +66,7 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/inventory', inventoryRoutes);
 app.use('/api/daily', dailySummaryRoutes);
 app.use('/api/cocina', cocinaRoutes);
+app.use('/api/export', exportRoutes);
 
 // ========================
 //    ERROR HANDLERS

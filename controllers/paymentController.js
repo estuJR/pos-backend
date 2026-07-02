@@ -54,6 +54,38 @@ const processPayment = async (req, res) => {
 
     await t.commit();
 
+    // ── Insertar en pos_transactions para que aparezca en el reporte web ──
+    try {
+      // Obtener items de la orden para guardarlos en pos_transactions
+      const orderItems = await OrderItem.findAll({ where: { order_id } })
+
+      // Fecha en Guatemala (UTC-6)
+      const nowGT = new Date(Date.now() - 6 * 60 * 60 * 1000)
+      const dateGT = nowGT.toISOString().slice(0, 10)
+
+      const items = orderItems.map(i => ({
+        name:     i.product_name,
+        category: i.category || 'otros',
+        quantity: i.quantity,
+        price:    parseFloat(i.unit_price || 0),
+      }))
+
+      // Determinar método principal para pos_transactions
+      const methodMap = { cash: 'efectivo', card: 'tarjeta', transfer: 'transferencia' }
+      const posMeth = methodMap[method] || method || 'efectivo'
+
+      const { sequelize: sq } = require('../models')
+      await sq.query(
+        `INSERT INTO pos_transactions
+           (transaction_date, amount, method, items, notes, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, NOW(), NOW())`,
+        { replacements: [dateGT, total, posMeth, JSON.stringify(items), `Orden app #${order_id}`] }
+      )
+    } catch (syncErr) {
+      // No romper el pago si falla la sincronización
+      console.error('pos_transactions sync error:', syncErr.message)
+    }
+
     const fullPayment = await Payment.findByPk(payment.id, {
       include: [{ model: Order, as: 'order' }],
     });

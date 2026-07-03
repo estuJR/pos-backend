@@ -112,7 +112,6 @@ const createOrder = async (req, res) => {
     }
 
     let subtotal = 0;
-    const taxRate = parseFloat(process.env.RESTAURANT_TAX || 0);
     const orderItemsData = [];
 
     for (const item of items) {
@@ -150,8 +149,8 @@ const createOrder = async (req, res) => {
       });
     }
 
-    const tax_amount = parseFloat((subtotal * taxRate).toFixed(2));
-    const total = parseFloat((subtotal + tax_amount).toFixed(2));
+    const tax_amount = 0;
+    const total = parseFloat(subtotal.toFixed(2));
 
     const today = new Date();
     const dateStr = today.toISOString().slice(0, 10).replace(/-/g, '');
@@ -342,14 +341,13 @@ const removeItemFromOrder = async (req, res) => {
 
 // Helper: Recalcular totales de una orden
 const recalculateOrderTotals = async (order_id, t) => {
-  const taxRate = parseFloat(process.env.RESTAURANT_TAX || 0.12);
   const items = await OrderItem.findAll({
     where: { order_id, status: { [require('sequelize').Op.ne]: 'cancelled' } },
     transaction: t,
   });
   const subtotal = items.reduce((sum, item) => sum + parseFloat(item.subtotal), 0);
-  const tax_amount = parseFloat((subtotal * taxRate).toFixed(2));
-  const total = parseFloat((subtotal + tax_amount).toFixed(2));
+  const tax_amount = 0;
+  const total = parseFloat(subtotal.toFixed(2));
   await Order.update({ subtotal, tax_amount, total }, { where: { id: order_id }, transaction: t });
 };
 

@@ -77,10 +77,10 @@ const processPayment = async (req, res) => {
       const { sequelize: sq } = require('../models')
       await sq.query(
       `INSERT INTO pos_transactions
-        (transaction_date, amount, method, items, created_at, updated_at)
-          VALUES (?, ?, ?, ?, NOW(), NOW())`,
-        { replacements: [dateGT, total, posMeth, JSON.stringify(items)] }
-      )
+        (transaction_date, table_number, person, method, amount, items, user_name, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
+          { replacements: [dateGT, 0, 1, posMeth, total, JSON.stringify(items), 'App iOS'] }
+        )
     } catch (syncErr) {
       // No romper el pago si falla la sincronización
       console.error('pos_transactions sync error:', syncErr.message)

@@ -406,18 +406,43 @@ router.get('/recipes/all-products', async (req, res) => {
 
 // ═══════════════════════════════════════════════════════════════
 //  POST /api/pos-transactions/recipes
-//  Crear receta: { product_name, inventory_item_id, quantity_used, unit, notes }
+//  Crear receta — soporta un ingrediente o múltiples a la vez
+//  Single:   { product_name, inventory_item_id, quantity_used, unit, notes }
+//  Multiple: { product_name, ingredients: [{ inventory_item_id, quantity_used, unit, notes }] }
 // ═══════════════════════════════════════════════════════════════
 router.post('/recipes', async (req, res) => {
   try {
-    const { product_name, inventory_item_id, quantity_used, unit, notes } = req.body
-    if (!product_name || !inventory_item_id || !quantity_used) {
-      return res.status(400).json({ success: false, message: 'Datos incompletos' })
+    const { product_name, inventory_item_id, quantity_used, unit, notes, ingredients } = req.body
+
+    if (!product_name) {
+      return res.status(400).json({ success: false, message: 'product_name requerido' })
+    }
+
+    const name = product_name.trim()
+
+    // Modo múltiple: array de ingredientes en un solo request
+    if (Array.isArray(ingredients) && ingredients.length > 0) {
+      const inserted = []
+      for (const ing of ingredients) {
+        if (!ing.inventory_item_id || !ing.quantity_used) continue
+        const [result] = await sequelize.query(
+          `INSERT INTO product_recipes (product_name, inventory_item_id, quantity_used, unit, notes)
+           VALUES (?, ?, ?, ?, ?)`,
+          { replacements: [name, ing.inventory_item_id, parseFloat(ing.quantity_used), ing.unit || 'unidades', ing.notes || null] }
+        )
+        inserted.push(result)
+      }
+      return res.status(201).json({ success: true, message: `${inserted.length} ingredientes guardados` })
+    }
+
+    // Modo single: un solo ingrediente
+    if (!inventory_item_id || !quantity_used) {
+      return res.status(400).json({ success: false, message: 'inventory_item_id y quantity_used requeridos' })
     }
     const [result] = await sequelize.query(
       `INSERT INTO product_recipes (product_name, inventory_item_id, quantity_used, unit, notes)
        VALUES (?, ?, ?, ?, ?)`,
-      { replacements: [product_name.trim(), inventory_item_id, parseFloat(quantity_used), unit || 'unidades', notes || null] }
+      { replacements: [name, inventory_item_id, parseFloat(quantity_used), unit || 'unidades', notes || null] }
     )
     const [[newRecipe]] = await sequelize.query(
       `SELECT r.id, r.product_name, r.quantity_used, r.unit, r.notes,

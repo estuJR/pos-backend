@@ -110,6 +110,12 @@ router.get('/excel', async (req, res) => {
       return row
     }
 
+    // 5. Inventario
+    const [inventoryRows] = await sequelize.query(
+      `SELECT name, category, quantity, unit, min_stock, cost_per_unit, updated_at
+       FROM inventory_items WHERE is_active = 1 ORDER BY category ASC, name ASC`
+    )
+
     // ── Workbook ─────────────────────────────────────────────────
     const wb = new ExcelJS.Workbook()
     wb.creator = 'El Jardín de los Conejos'
@@ -198,6 +204,40 @@ router.get('/excel', async (req, res) => {
     ws5.addRow([])
     const tr5 = tot(ws5, ['', 'TOTAL', totalGastos, ''])
     tr5.getCell(3).numFmt = NUM_FMT
+
+    // ── Hoja 6: Inventario ──────────────────────────────────────
+    const ws6 = wb.addWorksheet('Inventario')
+    ws6.columns = [
+      { width: 28 }, { width: 16 }, { width: 12 },
+      { width: 12 }, { width: 12 }, { width: 14 }, { width: 18 }
+    ]
+    hdr(ws6, ['PRODUCTO', 'CATEGORÍA', 'EXISTENCIA', 'UNIDAD', 'STOCK MÍNIMO', 'COSTO/UNIDAD (Q)', 'ÚLTIMA ACTUALIZACIÓN'])
+    let totalValorInv = 0
+    inventoryRows.forEach(item => {
+      const qty   = Number(item.quantity   || 0)
+      const cost  = Number(item.cost_per_unit || 0)
+      const valor = qty * cost
+      totalValorInv += valor
+      const alerta = qty <= Number(item.min_stock || 0) ? '⚠️ ' : ''
+      const updated = item.updated_at ? String(item.updated_at).slice(0, 10) : ''
+      const row = data(ws6, [
+        alerta + item.name,
+        item.category || 'general',
+        qty,
+        item.unit || 'unidades',
+        Number(item.min_stock || 0),
+        cost,
+        updated
+      ])
+      row.getCell(6).numFmt = NUM_FMT
+      // Resaltar en rojo si stock bajo
+      if (qty <= Number(item.min_stock || 0)) {
+        row.getCell(1).font = { ...BASE_FONT, color: { argb: 'FFC45A1F' }, bold: true }
+      }
+    })
+    ws6.addRow([])
+    const tr6 = tot(ws6, ['TOTAL ÍTEMS: ' + inventoryRows.length, '', '', '', '', totalValorInv, ''])
+    tr6.getCell(6).numFmt = NUM_FMT
 
     // ── Enviar ───────────────────────────────────────────────────
     const fileName = `reporte-jardindelosconejos-${from}-${to}.xlsx`

@@ -86,6 +86,52 @@ const processPayment = async (req, res) => {
       console.error('pos_transactions sync error:', syncErr.message)
     }
 
+    // ── Descontar ingredientes del inventario según recetas ──
+    try {
+      const orderItems = await OrderItem.findAll({ where: { order_id } })
+
+      for (const item of orderItems) {
+        const productName = (item.product_name || '').trim()
+        const qtySold = Number(item.quantity || 1)
+        if (!productName || qtySold <= 0) continue
+
+        const { sequelize: sq } = require('../models')
+
+        const [recipes] = await sq.query(
+          `SELECT r.inventory_item_id, r.quantity_used, i.name as item_name, i.quantity as current_qty
+           FROM product_recipes r
+           JOIN inventory_items i ON i.id = r.inventory_item_id
+           WHERE LOWER(r.product_name) = LOWER(?) AND r.is_active = 1 AND i.is_active = 1`,
+          { replacements: [productName] }
+        )
+
+        for (const recipe of recipes) {
+          const toDeduct = parseFloat(recipe.quantity_used) * qtySold
+          const newQty   = Math.max(0, parseFloat(recipe.current_qty) - toDeduct)
+
+          await sq.query(
+            `UPDATE inventory_items SET quantity = ?, updated_at = NOW() WHERE id = ?`,
+            { replacements: [newQty, recipe.inventory_item_id] }
+          )
+
+          await sq.query(
+            `INSERT INTO inventory_movements (item_id, type, quantity, reason, user_name, created_at)
+             VALUES (?, 'salida', ?, ?, 'App iOS', NOW())`,
+            { replacements: [
+                recipe.inventory_item_id,
+                toDeduct,
+                `Venta: ${qtySold}x ${productName}`
+              ]
+            }
+          )
+
+          console.log(`📦 Inventario: ${recipe.item_name} ${recipe.current_qty} → ${newQty} (${qtySold}x ${productName})`)
+        }
+      }
+    } catch (invErr) {
+      console.error('⚠️ Error descontando inventario (pago guardado igual):', invErr.message)
+    }
+
     const fullPayment = await Payment.findByPk(payment.id, {
       include: [{ model: Order, as: 'order' }],
     });
